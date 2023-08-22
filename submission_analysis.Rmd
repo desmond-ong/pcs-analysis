@@ -1,0 +1,528 @@
+---
+title: "cogsci submission analysis"
+author: "originally written by : desmond ong (desmond.c.ong @ gmail)"
+output: html_document
+date: "2023-03-18"
+runtime: shiny
+---
+
+This repository contains an R Shiny app that helps to simplify the process of making final CogSci decisions. This assumes that CogSci is still using PCS, the reviews and meta-reviews are in (or coming in), and organizing committee chairs want to get started on making decisions.
+
+## Why this app?
+
+The *manual* way is via the PCS website. You login, and you can see every paper. But it's really difficult to *sort* the papers (And everytime you load the `Submissions` page it takes a while as its pulling and refreshing data). It's great for looking at individual papers (or if you have 1-6 papers), but it's horrendous when you have 900 papers to go through. Moreover, as you are making your decisions, you have no way of keeping track of how many accepts you have had so far, as well as associated statistics (e.g., what is the mean scores of the "paper" decisions, etc.)
+
+Compared to the PCS interface, this app interface allows you to select specific papers, see the reviews, put in a decision, and then see how that decision updates the distribution of scores. There's a table that provides a running update on the numbers of talks, numbers of posters, etc.
+
+You'll need one co-chair who's somewhat familiar with R / RStudio to launch/host it.
+
+## Basic setup
+
+- RStudio has great support for Shiny. If you load the `.rmd` file in RStudio, you should have a "Run Document" button right at the top.
+- The APP can be hosted on Shiny Apps https://shinyapps.io/
+    - You can sign up for a free account, which allows up to 25 hours of app usage on the free tier. For CogSci2023 we used about 30+ hours, so I just signed up for the cheapest plan ($9/month). There might be a way to host this for free but *shrug* it wasn't too expensive.
+    - The great thing about hosting it on Shiny Apps is that any of the other co-chairs (even those unfamiliar with R) can access the app. 
+    - You need to run some code using rsconnect (code chunk below with instructions) to tell RStudio how to talk to your ShinyApps account.
+- The DATA has to be stored in the cloud somewhere, as ShinyApps doesn't provide data storage. I chose to use Dropbox, using the `rdrop2` library. The person hosting it will have to run some code (in the next chunk) to generate an authentication token (`token.rds`) to allow the app to access their Dropbox.
+- To deploy the app, just hit "Run Document", then in the top-right of the window there'll be a "Publish" (or "Re-publish") button. Just hit that, select which account, **make sure to select the `.rmd` file and the `token.rds` file**, and boom, you're done! 
+
+If any of the co-chairs wants to run this locally on their own computer (saving some compute hours on ShinyApp), just send them this `.rmd` file and your `token.rds`. They can just load this `.rmd` in RStudio and go.
+
+
+## Outline
+
+- Once-off: Set up Shiny Apps (via the Shiny Apps website)
+- Once-off: Set up Dropbox (via `rdrop2::drop_auth()`)
+- Once-off/continuous: Get data from PCS (from two or more chairs)
+	- There are various data cleaning steps
+- Continuous: Using the app to make and track decisions
+
+
+### Set up Shiny Apps
+
+```{r shiny-apps-setup, eval=FALSE, echo=FALSE}
+## This chunk has one-off code for setting up ShinyApps
+## When you set up your ShinyApps account on the website it will prompt you on how to set up your authentication. Basically, it'll look like the following:
+
+#install.packages('rsconnect')
+#
+#rsconnect::setAccountInfo(name='  YOUR ACCOUNT NAME   ',
+#			  token='  YOUR TOKEN  ',
+#			  secret='  <SECRET>  ')
+```
+
+### Set up Dropbox authentication
+
+```{r dropbox-auth-setup, eval=FALSE, echo=FALSE}
+## This chunk has one-off code for setting up Dropbox integration
+## You have to install rdrop2, then run drop_auth() to generate a token
+## then saving it into an .rds file.
+## This .rds file contains the ability to access all your dropbox files, so
+## TREAT IT LIKE A PASSWORD. (e.g., don't upload your .rds files to github)
+
+install.packages('rdrop2')
+
+library(rdrop2)
+token <- drop_auth()
+saveRDS(token, file = "token.rds")
+```
+
+
+### Getting the data
+
+1. Download Submissions From PCS: 
+    - `Chairing` -> `Submissions` (top left most link) -> [Wait for big table to load... "receiving data/rendering table"...] -> clear your search filters, if any, in the orange box in the top right -> click on the `Download` button on top right. The file should be named `Submissions.csv` by default.
+    - **Note** that there seems to be an alternative way to download submissions, which is `Chairing` -> `Downloadable Spreadsheets` heading -> (as csv) `Submissions` option. This file (by default named `cogsci23a_submission.csv` or whatever your cogsci year is named) does **NOT** give enough data to proceed.
+    - Run the code in the following chunk to create the initial `working_file.csv`.
+2. Download Reviews From PCS: 
+    - `Chairing` -> `Downloadable Spreadsheets` -> (as csv) `Reviews`
+    - The default name should be something like `cogsci23a_reviews.csv` (modify for your cogsci year)
+3. Put `working_file.csv` and the `cogsci23a_reviews.csv` file in the REMOTE_DIRECTORY (the Dropbox directory).
+
+
+Note that this file you generate will not contain your conflicts (e.g., papers that are co-authored by you, your students, or your collaborators (the "pink highlighted" papers on PCS). Since you can't see them on PCS, it makes sense that PCS won't give you those files in the csv). So you will have to ask one of the other co-chairs who does not have the same conflicts as you to pull these files as well for you to merge. There's code below to help.
+
+
+The code chunk below has one-off code that the hosting chair would have to run locally on their machine, depending on what you need to achieve:
+
+- Create Initial Working File
+- Updating Working File (when more scores come in)
+- Merge review/scores for conflicted paperIDs
+- Updating Reviews
+- Prepare file to upload to PCS
+
+
+```{r these-codes-should-be-run-once-when-situation-calls-for-it, eval=FALSE, echo=FALSE}
+library(tidyverse)
+
+# These codes should only be run once or when situation calls for it. Don't run the whole chunk, only the parts of the code you need
+
+## -- Create Initial Working File -- ##
+## run this ONLY once to create a working_file
+# These next few lines of code are to be run once to create the first working_file
+SUBMISSION_FILENAME = "Submissions.csv" # from Step 1. in instructions above
+
+initial_working_file = read.csv(SUBMISSION_FILENAME, header=T) %>%
+  select(ID, Title.1195., Subcommittee, Type.of.Submission, Decision,
+         ReviewsTotal, ReviewsDone, ReviewsLeft, ReviewsTentative,
+         ReviewerScore, OverallScore, OverallStdDev, WeightedOverall.Score
+         ) %>%
+  ## filtering out only the PAPERS (i.e., excluding member abstracts, workshops, etc)
+  filter(Type.of.Submission == "paper") %>%
+  ## filtering out desk rejects
+  filter(Decision != "DREJ") %>%
+  ## replacing missing decisions with "Undecided"
+  mutate(Decision = replace(Decision, Decision=="", "Undecided"))
+  
+write.csv(initial_working_file, "working_file.csv", row.names=F)
+
+# Note that the app requires there to be a valid `WeightedOverall.Score`. 
+# If this is missing (e.g., a submission has NO reviews), then this particular paper will not show up in the histogram/app below. 
+# just carry on with the rest of the reviews first. You'll have to update this working_file with the scores for these missing papers, using below code
+
+
+
+
+
+
+
+## -- Updating Working File (when more scores come in) -- ##
+# you can use this line of code to update the working_file without losing your decisions.
+new_submissions_file = read.csv(SUBMISSION_FILENAME, header=T) %>%
+  select(ID, Title.1195., Subcommittee, Type.of.Submission, Decision,
+         ReviewsTotal, ReviewsDone, ReviewsLeft, ReviewsTentative,
+         ReviewerScore, OverallScore, OverallStdDev, WeightedOverall.Score
+         ) %>%
+  filter(Type.of.Submission == "paper") %>%
+  filter(Decision != "DREJ")
+
+original_submission_file = drop_read_csv(file=paste(REMOTE_DIRECTORY, WORKING_FILENAME, sep="/"), dtoken=token) %>%
+  mutate(Decision = replace(Decision, Decision=="", "Undecided"))
+
+## the following should return TRUE
+## just checking that the IDs in the two files match
+sum(original_submission_file$ID==new_submissions_file$ID) == nrow(original_submission_file)
+
+updated_file <- new_submissions_file %>% mutate(
+  Decision = original_submission_file$Decision
+)
+updated_file %>% write.csv("working_file.csv", row.names=F)
+
+
+
+
+
+
+## -- Merge review/scores for conflicted paperIDs -- ##
+
+# Use these next few lines of code to MERGE the review and score data from your fellow co-chair
+CONFLICT_IDS = c(1000, 1001, ..., ..., )
+
+review_file1 = "cogsci23a_reviews_2023_03_30.csv"
+review_file2 = "cogsci23a_reviews_FROM_CO_CHAIR.csv"
+
+f1 = read.csv(review_file1, header=T)
+f2 = read.csv(review_file2, header=T)
+
+f3 = bind_rows(f1 %>% filter(Reviewer!="CONFLICT"),
+               f2 %>% filter(Sub.ID %in% CONFLICT_IDS))
+write.csv(f3, "cogsci23a_reviews.csv", row.names=F)
+
+
+## -- Updating Reviews -- ##
+
+# IF more meta-reviews come in, simply re-download the `cogsci23a_reviews.csv` file and update it in the REMOTE_DIRECTORY.
+# Be aware not to overwrite your conflicts. You can repeat the above steps and ask your co-chair to re-download the metareviews as they would include the reviews for which you have conflicts.
+
+
+
+
+## -- Prepare file to upload to PCS -- ##
+
+## and finally, use these next few lines of code to generate file to upload to PCS
+f1 = read.csv('working_file.csv', header=T)
+f2 = f1 %>% mutate(
+  Decision1 = factor(Decision,
+                     levels = c("Talk", "Poster", "Abstract", "Reject"),
+                     labels = c("APT", "APP", "PAA", "REJ"))
+) %>% select(ID, Decision1) %>% 
+  write.table("submit_to_PCS.csv", row.names = F, col.names=F, sep=",")
+
+
+```
+
+
+
+
+# --- Here begins the app ---
+
+Instructions for use:
+
+- Click the decile you want to look at
+- Click the paperID
+- Scroll, read the reviews
+- Use the Decision dropdown menu to change the decision.
+
+
+### !!! Remember to save by hitting "Write to file!" !!!
+
+You need to click "Write to file" to send the file up to Dropbox! It's not auto-saved.
+
+Also make sure that **only one person** is working on the app at any one time, otherwise you might overwrite each other's changes.
+
+
+```{r setup, include=FALSE}
+# This chunk sets up the code to run the app.
+library(tidyverse)
+library(rdrop2)
+
+# loads in the dropbox authentication token, and refresh the validity.
+token = readRDS("token.rds")
+token$refresh()
+
+## This REMOTE_DIRECTORY is the location of the host's dropbox folder
+## it WILL throw an error if this folder does not exist, 
+## so please make a folder / edit this path.
+## This path is relative from the base Dropbox directory
+## e.g., if the host chair's Dropbox folder is: Dropbox/Conferences/CogSci2023/output, then:
+REMOTE_DIRECTORY = 'Conferences/CogSci2023/output'
+
+# These files live in the "REMOTE_DIRECTORY"
+REVIEW_FILENAME = "cogsci23a_reviews.csv"
+WORKING_FILENAME = "working_file.csv"
+
+NUMBER_DESK_REJECTED = 0 ## I just hard-coded it here since it doesn't change within the app, because at some point above in the working file we filtered out the desk rejected ones. Please update this.
+
+
+DECISION_VALUES = c("Talk", "Poster", "Abstract", "Reject", "Undecided")
+DECISION_VALUE_COLORS = c("Talk" = "green", 
+                          "Poster" = "orange", 
+                          "Abstract" = "yellow", 
+                          "Reject" = "red", 
+                          "Undecided" = "gray")
+
+
+# Reading in the working filename
+d_scores = drop_read_csv(file=paste(REMOTE_DIRECTORY, WORKING_FILENAME, sep="/"), dtoken=token)
+
+d_reviews = drop_read_csv(file=paste(REMOTE_DIRECTORY, REVIEW_FILENAME, sep="/"), dtoken=token) %>%
+  filter(Sub.ID %in% d_scores$ID) %>% 
+  select(Sub.ID, Title, Role, Review.ID,
+         Review.Score, Confidence.Level,
+         The.Review, Recommendation,
+         Prize_Recommendation,
+         Comments.to.Committee,
+         Comments.to.chairs
+  ) %>% mutate(
+    Conf.Level = factor(Confidence.Level,
+                        levels = c(1.25, 1, 0.75),
+                        labels = c("Very confident", "Moderately confident", "Not sure"))
+  )
+
+DECILE_VALUES = unname(quantile(d_scores$WeightedOverall.Score, probs = seq(0, 1, 0.10), na.rm=T))
+
+```
+
+
+
+
+
+```{r shiny-app, eval=TRUE, echo=FALSE}
+# This is the app itself
+shinyApp(
+
+  ui = fluidPage(
+    # App title ----
+    titlePanel("Interactive UI for processing CogSci submissions and reviews"),
+    
+    fluidRow(
+      column(4,
+             dataTableOutput("summary_statistics"),
+        ),
+        column(8,
+               plotOutput("hist")
+        )
+    ),
+    fluidRow(
+      column(4,
+             selectInput("which_decile", "Choose decile",
+                           choices = c("Top 10%", "11-20%", "21-30%", "31-40%", 
+                                       "41-50%", "51-60%", "61-70%", "71-80%", 
+                                       "81-90%", "Bottom 10%"),
+                           selected = "Top 10%")
+        ),
+        column(8,
+               tags$div(numericInput(
+                 "cutoff_1", "cutoff%_abstract", value = 20, width=150), 
+                 style="display:inline-block"),
+               tags$div(numericInput(
+                 "cutoff_2", "cutoff%_poster", value = 40, width=150),
+                 style="display:inline-block"),
+               tags$div(numericInput(
+                 "cutoff_3", "cutoff%_talk", value = 80, width=150),
+                 style="display:inline-block")
+        )
+    ),
+    
+    fluidRow(
+      column(3,
+             uiOutput("paperID_Selector")
+      ),
+      
+      column(3,
+             uiOutput("decision_selector")
+        ),
+      
+      column(3, 
+             textOutput("paper_score")
+             ),
+      
+      column(3,
+             actionButton("writeButton", "Write To File"),
+             "Remember to SAVE by clicking this button!"
+             )
+    ),
+    
+    fluidRow(
+      column(12,
+             dataTableOutput("table_reviews")
+      )
+    )
+  ),
+  
+  
+  
+  
+  server = function(input, output) {
+    # this reactiveValues obj is necessary to dynamically read/write data
+    rv <- reactiveValues(
+      data = d_scores,
+      currently_selected = NA
+    )
+    
+    # plot histogram of current decisions
+    output$hist = renderPlot({
+      rv$data %>%
+        ggplot(aes(x=WeightedOverall.Score, fill=Decision)) + 
+        geom_histogram(binwidth=.25) + 
+        scale_fill_manual(values=DECISION_VALUE_COLORS) +
+        geom_vline(xintercept=
+                     unname(quantile(d_scores$WeightedOverall.Score, probs = (input$cutoff_1/100), na.rm=T))  
+                   , linetype='dashed', col='red', size=1) + 
+        geom_vline(xintercept=
+                     unname(quantile(d_scores$WeightedOverall.Score, probs = (input$cutoff_2/100), na.rm=T))
+                   , linetype='dashed', col='orange', size=1) + 
+        geom_vline(xintercept=
+                     unname(quantile(d_scores$WeightedOverall.Score, probs = (input$cutoff_3/100), na.rm=T))
+                   , linetype='dashed', col='green', size=1) +
+        theme_bw()
+    })
+    
+    # table of # talk, # poster, etc
+    output$summary_statistics = renderDataTable({
+      this_df = rv$data
+      summary_tab = data.frame(
+        Decision = c(DECISION_VALUES[-5], "[Desk Reject]", "Undecided"),
+        Count = c(
+          unname(table(this_df$Decision)["Talk"]),
+          unname(table(this_df$Decision)["Poster"]),
+          unname(table(this_df$Decision)["Abstract"]),
+          unname(table(this_df$Decision)["Reject"]),
+          NUMBER_DESK_REJECTED, # number of desk rejected, which I've already excluded
+          unname(table(this_df$Decision)["Undecided"])
+        )
+      )
+      summary_tab$Percentage = format(
+        summary_tab$Count / sum(summary_tab$Count, na.rm=T) * 100, digits=3)
+      summary_tab
+    }, options = list(searching = FALSE, lengthChange=FALSE, paging=FALSE))
+    
+    
+    # making a list of paper_ids for the desired decile
+    output$paperID_Selector <- renderUI({
+      
+      # we need to subset the data into deciles.
+      df_subset = rv$data
+      # ugly code, but hey it works.
+      if(input$which_decile == "Top 10%") {
+        df_subset = df_subset %>% filter(WeightedOverall.Score >= DECILE_VALUES[10])
+      } else if(input$which_decile == "11-20%") {
+        df_subset = df_subset %>% filter(WeightedOverall.Score >= DECILE_VALUES[9],
+                                   WeightedOverall.Score < DECILE_VALUES[10])
+      } else if(input$which_decile == "21-30%") {
+        df_subset = df_subset %>% filter(WeightedOverall.Score >= DECILE_VALUES[8],
+                                   WeightedOverall.Score < DECILE_VALUES[9])
+      } else if(input$which_decile == "31-40%") {
+        df_subset = df_subset %>% filter(WeightedOverall.Score >= DECILE_VALUES[7],
+                                   WeightedOverall.Score < DECILE_VALUES[8])
+      } else if(input$which_decile == "41-50%") {
+        df_subset = df_subset %>% filter(WeightedOverall.Score >= DECILE_VALUES[6],
+                                   WeightedOverall.Score < DECILE_VALUES[7])
+      } else if(input$which_decile == "51-60%") {
+        df_subset = df_subset %>% filter(WeightedOverall.Score >= DECILE_VALUES[5],
+                                   WeightedOverall.Score < DECILE_VALUES[6])
+      } else if(input$which_decile == "61-70%") {
+        df_subset = df_subset %>% filter(WeightedOverall.Score >= DECILE_VALUES[4],
+                                   WeightedOverall.Score < DECILE_VALUES[5])
+      } else if(input$which_decile == "71-80%") {
+        df_subset = df_subset %>% filter(WeightedOverall.Score >= DECILE_VALUES[3],
+                                   WeightedOverall.Score < DECILE_VALUES[4])
+      } else if(input$which_decile == "81-90%") {
+        df_subset = df_subset %>% filter(WeightedOverall.Score >= DECILE_VALUES[2],
+                                   WeightedOverall.Score < DECILE_VALUES[3])
+      } else if(input$which_decile == "Bottom 10%") {
+        df_subset = df_subset %>% filter(WeightedOverall.Score < DECILE_VALUES[2])
+      }
+      df_subset = df_subset %>% arrange(desc(WeightedOverall.Score))
+      
+      paper_id_subset = paste(df_subset$ID, df_subset$Decision)
+      this_selected = paper_id_subset[1]
+      
+      # this next line of code with
+      # rv$currently_selected is just to make sure the UI stays on the 
+      #   currenty_selected paper right after changing the decision
+      # otherwise it'll bump back up to the first paper on the list 
+      # because this UI function is "refreshed" as well.
+      # super annoying, but here's the fix.
+      if(!is.na(rv$currently_selected)) {
+        this_selected = rv$currently_selected
+      }
+      
+      selectInput("this_paperID_decision", "paperID", choices = paper_id_subset,
+                  selected = this_selected)
+    })
+    
+    
+    # making the decision_selector
+    output$decision_selector <- renderUI({
+      # we need to get the current paperID, 
+      # then we need to make the decision dropdown menu
+      # the trick is that we need to make sure the "default" decision
+      # in the dropdown menu, corresponds to the existing decision
+      
+      # the dropdown menu is <paperID _ space _ decision>
+      
+      # we use str_split to get the paperID
+      # str_split is such an ugly function...
+      this_paperID = str_split_1(input$this_paperID_decision, ' ')[1]
+      
+      # and we get the current decision of the paper.
+      this_df = rv$data
+      current_decision = this_df$Decision[which(this_df$ID==this_paperID)] 
+      
+      # creating the dropdown menu with the current_decision as default
+      selectInput("this_decision", "Decision", choices = DECISION_VALUES,
+                  selected = current_decision)
+    })
+    
+    # function that is called when decision is updated
+    observeEvent(input$this_decision, {
+      # we get the paper ID, 
+      # we update the data frame (we have to use the reactive value)
+      
+      # str_split is such an ugly function...
+      this_paperID = str_split_1(input$this_paperID_decision, ' ')[1]
+      
+      # "pulling" the data from the reactive values object (rv)
+      this_df = rv$data
+      
+      # finding which row
+      which_row = which(this_df$ID==this_paperID)
+      
+      # if the decision is changed,
+      if(this_df$Decision[which_row] != input$this_decision) {
+        
+        # update the decision
+        this_df$Decision[which_row] = input$this_decision
+        
+        # write the data back to the reactive values object (rv)
+        rv$data <- this_df
+        rv$currently_selected <- paste(this_df$ID[which_row],
+                                       this_df$Decision[which_row])
+        # also write the currently_selected option which is used
+        # when updating the dropdown menu
+      }
+    })
+    
+    
+    # function to writing the paper score on screen
+    output$paper_score = renderText({
+      # str_split is such an ugly function...
+      this_paperID = str_split_1(input$this_paperID_decision, ' ')[1]
+      this_title = (d_scores %>% filter(ID == this_paperID))$Title.1195.
+      this_score = (d_scores %>% filter(ID == this_paperID))$WeightedOverall.Score
+      return(paste("Weighted Score: ", this_score, "\nTitle:", this_title))
+    })
+    
+    # function to render the reviews in a table format.
+    output$table_reviews = renderDataTable({
+      # str_split is such an ugly function...
+      this_paperID = str_split_1(input$this_paperID_decision, ' ')[1]
+      if(this_paperID %in% d_reviews$Sub.ID) {
+        this_table = d_reviews %>% filter(Sub.ID == this_paperID) %>%
+          arrange(desc(Role), Review.ID) %>%
+          select(Role, The.Review, Recommendation, Conf.Level, 
+                 Comments.to.Committee, Comments.to.chairs) %>%
+          rename("ToComm" = Comments.to.Committee,
+                 "ToChairs" = Comments.to.chairs)
+          
+      } else {
+        # this shouldn't happen since paperID is pulled from a dropdown menu.
+        this_table = data.frame(Output="paper.id not found")
+      }
+    }, options = list(searching = FALSE, lengthChange=FALSE, paging=FALSE))
+    
+    
+    # function that gets called when "writeButton" is clicked
+    observeEvent(input$writeButton, {
+      # write the data (pulled from the reactive value obj) to a file
+      write.csv(rv$data, "working_file.csv", row.names=F)
+      drop_upload('working_file.csv', path = REMOTE_DIRECTORY, dtoken=token)
+    })
+  },
+
+  options = list(height = 2000)
+)
+
+```
+

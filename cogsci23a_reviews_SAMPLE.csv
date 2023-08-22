@@ -1,0 +1,7 @@
+Sub.ID,Title,Decision,Reviewer,Email,Role,Review.ID,Match,Bid,Review.Score,Review.Weight,Review.quality,Review.special.recognition,Confidence.Level,Type.of.Submission,The.Review,Recommendation,Prize_Recommendation,Recommendation_Symp,Recommendation_PubBased,Recommendation_WorkTut,Status,Comments.to.Committee,Comments.to.chairs
+1001,Cognition is Awesome,,XYZ,XYZ@ABC.EDU,metareviewer,review 1,0,NA,3,1.25,NA,NA,1.25,Cognitive Science; Psychology,This is an amazing paper.,5 - poster or talk,,NA,NA,NA,faculty,,
+1002,My paper is better than yours.,,XYZ,XYZ@ABC.EDU,metareviewer,review 1,0,NA,4,1.25,NA,NA,1.25,Cognitive Science; Psychology,"Damn right, it's better than yours.",4 - poster,,NA,NA,NA,faculty,,
+1003,Moar cognition,,XYZ,XYZ@ABC.EDU,metareviewer,review 1,0,NA,2,1,NA,NA,1,Cognitive Science; Psychology,Ok.,2 - abstract,NOT_Recommend,NA,NA,NA,faculty,,
+1004,I'm tired,,XYZ,XYZ@ABC.EDU,metareviewer,review 1,0,NA,1,1,NA,NA,1,Cognitive Science; Psychology,Nah.,1 - possible reject,NOT_Recommend,NA,NA,NA,faculty,,
+1001,Cognition is Awesome,,ABC,ABC@XYZ.EDU,reviewer,review 2,0,NA,4,1,NA,NA,1,Cognitive Science; Psychology,Reviewer 1's comments here,,,NA,NA,NA,,,
+1001,Cognition is Awesome,,DEF,DEF@XYZ.EDU,reviewer,review 3,0,NA,3,1,NA,NA,1,Cognitive Science; Psychology,Reviewer 2's comments here,,,NA,NA,NA,,,
